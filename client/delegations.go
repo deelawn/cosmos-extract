@@ -13,10 +13,14 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-func (c *Client) GetAccountDelegations(ctx context.Context, params structs.HeightAccount) (resp structs.GetAccountDelegationsResponse, err error) {
+func (c *client) GetAccountDelegations(
+	ctx context.Context,
+	params structs.HeightAccount,
+) (resp structs.GetAccountDelegationsResponse, err error) {
+
 	resp.Height = params.Height
 
-	delResp, err := c.StakingClient.DelegatorDelegations(
+	delResp, err := c.stakingClient.DelegatorDelegations(
 		metadata.AppendToOutgoingContext(ctx, grpctypes.GRPCBlockHeightHeader, strconv.FormatUint(params.Height, 10)),
 		&types.QueryDelegatorDelegationsRequest{DelegatorAddr: params.Account},
 	)
