@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/figment-networks/cosmos-extract/client"
+	"github.com/figment-networks/indexing-engine/structs"
 	"go.uber.org/zap"
 )
 
@@ -47,55 +48,65 @@ func (r *runner) Run(ctx context.Context, cfg *Config) error {
 	r.logger.Info("Starting report run...")
 	defer r.logger.Info("REPORT RUN COMPLETE in " + time.Since(startTime).String())
 
-	// We want to get the last height for each of the months that fall within the provided time range,
-	// regardless of the specific times. Start by calculating the number of months we need heights for.
-	startYear := cfg.StartTime.Year()
-	startMonth := int(cfg.StartTime.Month())
-	endYear := cfg.EndTime.Year()
-	endMonth := int(cfg.EndTime.Month())
-	numMonths := (endYear-startYear)*12 + endMonth - startMonth + 1
-
-	lastMonthHeights := make([]uint64, numMonths)
-	for i := 0; i < numMonths; i++ {
-		// Use the current month to get the first time of the next month. We will pass this "before time"
-		// as an argument to indicate we want the last height that occurred before this time.
-		nextMonthFirstTime := time.Date(startYear, time.Month(startMonth+i+1), 1, 0, 0, 0, 0, time.UTC)
-		req := client.LastHeightBeforeReq{
-			Network:    network,
-			ChainID:    chainID,
-			BeforeTime: nextMonthFirstTime,
-		}
-
-		height, err := r.client.GetLastHeightBefore(ctx, req)
-		if err != nil {
-			return err
-		}
-
-		lastMonthHeights[i] = height
+	// Periods are built -- it is a chronologically ordered slice of month start and end
+	// times and the the last height for each month. This data allows us to efficiently
+	// query account delegation balances and rewards.
+	periods, err := r.buildOrderedPeriods(ctx, cfg.StartTime, cfg.EndTime)
+	if err != nil {
+		return err
 	}
 
-	fmt.Println(lastMonthHeights)
+	accounts := cfg.Accounts
+	results := initAccountResults(accounts)
 
-	// Get the last heights for each month
+	// For each period, get data for each account.
+	for _, period := range periods {
+		for _, acc := range accounts {
 
-	// ha := structs.HeightAccount{
-	// 	Network: network,
-	// 	Account: accounts[0],
-	// 	Height:  height,
-	// }
-	// resp, err := r.client.GetAccountDelegations(ctx, ha)
-	// if err != nil {
-	// 	return err
-	// }
+			durationResult := initDurationResult(period.startTime)
 
-	// fmt.Println(resp)
+			// Step 1: Get the delegation balances by validator.
+			heightAccount := structs.HeightAccount{
+				Height:  period.endHeight,
+				Account: acc,
+				Network: network,
+				ChainID: chainID,
+			}
 
-	// rb, err := r.client.GetRewardBalances(ctx, []structs.HeightAccount{ha})
-	// if err != nil {
-	// 	return err
-	// }
+			r.logger.Info("Getting account delegations", zap.String("account", acc), zap.Time("period", period.startTime))
+			delegationsResp, err := r.client.GetAccountDelegations(ctx, heightAccount)
+			if err != nil {
+				return fmt.Errorf("could not get account delegations for %+v: %w", heightAccount, err)
+			}
 
-	// fmt.Println(rb)
+			for _, d := range delegationsResp.Delegations {
+				durationResult.validators[string(d.Validator)] = true
+				durationResult.delegations[string(d.Validator)] = d.Balance.Numeric
+			}
 
-	return nil
+			// Step 2: Get rewards earned by validator.
+			rewReq := client.RewardsReq{
+				Network:   network,
+				ChainID:   chainID,
+				Account:   acc,
+				StartTime: period.startTime,
+				EndTime:   period.nextStartTime,
+			}
+
+			r.logger.Info("Getting account rewards", zap.String("account", acc), zap.Time("period", period.startTime))
+			rewSum, err := r.client.GetRewardsSum(ctx, rewReq)
+			if err != nil {
+				return fmt.Errorf("could not get rewards for %+v: %w", rewReq, err)
+			}
+
+			durationResult.rewards = rewSum
+			for v := range rewSum {
+				durationResult.validators[v] = true
+			}
+
+			results[acc] = append(results[acc], durationResult)
+		}
+	}
+
+	return results.writeToDisk(cfg.OutputPath)
 }

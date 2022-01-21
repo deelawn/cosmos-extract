@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"math/big"
 	"net/http"
 	"time"
 
@@ -35,6 +36,7 @@ type Client interface {
 		params structs.HeightAccount,
 	) (resp structs.GetAccountDelegationsResponse, err error)
 	GetLastHeightBefore(ctx context.Context, req LastHeightBeforeReq) (height uint64, err error)
+	GetRewardsSum(ctx context.Context, req RewardsReq) (rewards map[string]*big.Int, err error)
 }
 
 type client struct {
