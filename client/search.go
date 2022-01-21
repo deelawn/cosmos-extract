@@ -95,7 +95,9 @@ type RewardsReq struct {
 	Account   string    `json:"account"`
 }
 
-func (c client) GetRewardsSum(ctx context.Context, req RewardsReq) (rewards map[string]*big.Int, err error) {
+func (c client) GetRewardsAndFeesSum(ctx context.Context, req RewardsReq) (rewards map[string]*big.Int, fees map[string]*big.Int, err error) {
+
+	validatorCommisions := map[string]validatorCommission{}
 
 	url := c.searchAddr
 	if !strings.HasSuffix(url, "/") {
@@ -125,9 +127,9 @@ func (c client) GetRewardsSum(ctx context.Context, req RewardsReq) (rewards map[
 	if resp.StatusCode != http.StatusOK {
 		rawB, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return nil, fmt.Errorf("%w, %s", err, string(rawB))
+		return nil, nil, fmt.Errorf("%w, %s", err, string(rawB))
 	}
 
 	var dailySumm []structs.RewardSummary
@@ -137,6 +139,7 @@ func (c client) GetRewardsSum(ctx context.Context, req RewardsReq) (rewards map[
 	}
 
 	rewards = map[string]*big.Int{}
+	fees = map[string]*big.Int{}
 	for _, entry := range dailySumm {
 
 		// First sum all amounts present in this entry.
@@ -151,7 +154,36 @@ func (c client) GetRewardsSum(ctx context.Context, req RewardsReq) (rewards map[
 		} else {
 			rewards[string(entry.Validator)] = entrySubtotal
 		}
+
+		comm, ok := validatorCommisions[string(entry.Validator)]
+		if !ok {
+			comm, err = c.getValidatorCommission(ctx, string(entry.Validator))
+			if err != nil {
+				fmt.Printf("error getting validator %s: %s\n", string(entry.Validator), err.Error())
+			}
+			validatorCommisions[string(entry.Validator)] = comm
+		}
+
+		if comm.lastChanged.After(req.StartTime) {
+			fmt.Printf("validator %s fee last changed on %s\n", entry.Validator, comm.lastChanged.String())
+		}
+
+		newFee := big.NewInt(0)
+		// 10^18 is the numerator needed to get the commission rate
+		commNumerator, ok := big.NewInt(0).SetString("1000000000000000000", 10)
+		if !ok {
+			panic("no can numerator")
+		}
+
+		newFee = newFee.Div(big.NewInt(0).Mul(entrySubtotal, comm.value), commNumerator)
+
+		if fee, ok := fees[string(entry.Validator)]; ok {
+			fees[string(entry.Validator)] = fee.Add(fee, newFee)
+		} else {
+			fees[string(entry.Validator)] = newFee
+		}
 	}
 
-	return
+	return rewards, fees, nil
+
 }

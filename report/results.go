@@ -44,7 +44,7 @@ func initDurationResult(duration time.Time) durationResult {
 	}
 }
 
-func (ar accountResults) writeToDisk(path string) error {
+func (ar accountResults) writeToDisk(accounts []string, path string) error {
 
 	f, err := os.Create(path)
 	if err != nil {
@@ -60,9 +60,17 @@ func (ar accountResults) writeToDisk(path string) error {
 	defer cw.Flush()
 
 	// Write all the data and skip nil big ints.
-	for acc, durationResults := range ar {
+	for _, acc := range accounts {
+		durationResults := ar[acc]
 		for _, result := range durationResults {
 			date := result.duration.Format("2006-01")
+
+			// If this account isn't staking anything then write zeroes and move on.
+			if len(result.validators) == 0 {
+				cw.Write([]string{acc, date, "", "0", "0", "0", "0"})
+				continue
+			}
+
 			for v := range result.validators {
 
 				values := []string{acc, date, v}

@@ -46,7 +46,6 @@ func (r *runner) Run(ctx context.Context, cfg *Config) error {
 
 	startTime := time.Now()
 	r.logger.Info("Starting report run...")
-	defer r.logger.Info("REPORT RUN COMPLETE in " + time.Since(startTime).String())
 
 	// Periods are built -- it is a chronologically ordered slice of month start and end
 	// times and the the last height for each month. This data allows us to efficiently
@@ -94,19 +93,23 @@ func (r *runner) Run(ctx context.Context, cfg *Config) error {
 			}
 
 			r.logger.Info("Getting account rewards", zap.String("account", acc), zap.Time("period", period.startTime))
-			rewSum, err := r.client.GetRewardsSum(ctx, rewReq)
+			rewSum, feeSum, err := r.client.GetRewardsAndFeesSum(ctx, rewReq)
 			if err != nil {
 				return fmt.Errorf("could not get rewards for %+v: %w", rewReq, err)
 			}
 
+			// Not possible to have fees without rewards, so just check rewards.
 			durationResult.rewards = rewSum
 			for v := range rewSum {
 				durationResult.validators[v] = true
 			}
+			durationResult.fees = feeSum
 
 			results[acc] = append(results[acc], durationResult)
 		}
 	}
 
-	return results.writeToDisk(cfg.OutputPath)
+	r.logger.Info("REPORT RUN COMPLETE in " + time.Since(startTime).String())
+
+	return results.writeToDisk(cfg.Accounts, cfg.OutputPath)
 }
